@@ -1,0 +1,228 @@
+#Load in packages
+```{r}
+library(car)
+library(nlme)
+library(DHARMa)
+library(emmeans)
+library(tidyverse)
+library(lme4)
+library(cowplot)
+library(betareg)
+```
+
+##read in  data 
+```{r}
+Eggs <- read.csv("Eggs.csv")
+
+Bodysize <- read.csv("Body_sizes_lifespan.csv")
+
+Emergences <- read.csv("Emergences.csv")
+
+Development <- read.csv("Dev_times.csv")
+```
+
+#run linear model on total eggs by Treatment, then predict means and errors and plot
+```{r}
+sum_eggs_2 <- Eggs_long |> group_by(Treatment, ID) |> 
+  summarise(tot_eggs = sum(count, na.rm = TRUE)) |> ungroup() |> 
+  mutate(tot_days = c(41,37,43,33,45,39,36,33,38,34)) |> 
+  mutate(eggs_day = tot_eggs/tot_days)
+
+eggs_total_lm <- sum_eggs_2 |> lm(tot_eggs ~ Treatment, contrasts = list(Treatment = contr.sum), data = _)
+
+Anova(eggs_total_lm, type = 3)
+
+plot(eggs_total_lm)
+
+pred_tot_eggs <- emmeans(eggs_total_lm, c("Treatment"), type = "response") |> as_tibble()
+
+tot_eggs <- ggplot(pred_tot_eggs, aes(x=Treatment, y=emmean, colour=Treatment)) +
+  geom_point(size=3) + scale_color_manual(values=c("#56B4E9","#009E73")) +
+  geom_errorbar(aes(ymin=emmean-SE, ymax=emmean+SE), width = 0) +
+  ylab("Lifetime fecundity") + theme_bw() + geom_jitter(sum_eggs_2, mapping = aes(x = Treatment, y = tot_eggs), width = 0.3,
+              size = 2, alpha = 0.4, na.rm = TRUE)+ theme(legend.position = "none")
+
+tot_eggs
+```
+
+#eggs per day
+```{r}
+eggs_day_lm <- sum_eggs_2 |> lm(eggs_day ~ Treatment, contrasts = list(Treatment = contr.sum), data = _)
+
+Anova(eggs_day_lm, type = 3)
+
+plot(eggs_day_lm)
+
+pred_day_eggs <- emmeans(eggs_day_lm, c("Treatment"), type = "response") |> as_tibble()
+
+day_eggs <- ggplot(pred_day_eggs, aes(x=Treatment, y=emmean, colour=Treatment)) +
+  geom_point(size=3) + scale_color_manual(values=c("#56B4E9","#009E73")) +
+  geom_errorbar(aes(ymin=emmean-SE, ymax=emmean+SE), width = 0) +
+  ylab("Fecundity"~("eggs.day"^-1)) + theme_bw() + geom_jitter(sum_eggs_2, mapping = aes(x = Treatment, y = eggs_day), width = 0.3,
+              size = 2, alpha = 0.4, na.rm = TRUE)+ theme(legend.position = "none")
+
+day_eggs
+```
+
+#egg laying curve with 'loess' fit
+```{r}
+egg_curve <- ggplot(sum_eggs_1, aes(x = day, y = tot_eggs, colour = Treatment, fill = Treatment)) + geom_smooth(alpha = 0.3, method = "loess") + ylab("Number of eggs") + xlab ("Day") + theme_bw()+ theme(legend.position = "none") + scale_color_manual(values=c("#56B4E9","#009E73")) + scale_fill_manual(values=c("#56B4E9","#009E73")) #+ scale_y_continuous(limits = c(0,700)) #+ geom_jitter(alpha = 0.5)
+
+egg_curve
+```
+
+##total eggs laid in first 5 days
+```{r}
+sum_eggs_2_early <- Eggs_long |> mutate(day = as.numeric(day)) |> filter(day<5) |> group_by(Treatment, ID) |> 
+  summarise(tot_eggs = sum(count, na.rm = TRUE)) |> ungroup() 
+
+eggs_total_lm_early <- sum_eggs_2_early |> lm(tot_eggs ~ Treatment, contrasts = list(Treatment = contr.sum), data = _)
+
+Anova(eggs_total_lm_early, type = 3)
+
+plot(eggs_total_lm_early)
+
+pred_tot_eggs_early <- emmeans(eggs_total_lm_early, c("Treatment"), type = "response") |> as_tibble()
+
+eggs_early <- ggplot(pred_tot_eggs_early, aes(x=Treatment, y=emmean, colour=Treatment)) +
+  geom_point(size=3) +
+  geom_errorbar(aes(ymin=emmean-SE, ymax=emmean+SE), width = 0) +
+  ylab("Early fecundity") + theme_bw() + geom_jitter(sum_eggs_2_early, mapping = aes(x = Treatment, y = tot_eggs), width = 0.3,
+              size = 2, alpha = 0.4, na.rm = TRUE) + theme(legend.position = "none") + scale_color_manual(values=c("#56B4E9","#009E73"))
+
+eggs_early
+```
+
+#Combined fecundity plot (Figure 4)
+```{r}
+combined_plot <- plot_grid(tot_eggs, egg_curve, day_eggs, eggs_early, nrow = 2, ncol = 2, align = "hv", labels = c('A)','B)','C)','D)'),
+                          label_x = 0.02, label_y = 1.04)
+
+combined_plot
+
+legend <- get_legend(eggs_early + theme(legend.position = "right", legend.text = element_text(size=10)))
+
+combined_all <- plot_grid(combined_plot, legend, ncol = 2, rel_widths = c(1, 0.2))
+
+combined_all
+
+#ggsave("./fecundity_figure.pdf", combined_plot, width = 5, height = 4)
+```
+
+#Body size 
+```{r}
+facet_labels <- c("Female", "Male")
+names(facet_labels) <- c("F", "M")
+
+Bodysize <- Bodysize |> rename(Sex = Sex)
+
+Bodysize <- Bodysize |> mutate(Treatment = as.factor(Treatment))
+
+ggplot(Bodysize, aes(x=Treatment, y=sum_size, group_by = Sex, fill=Sex)) + geom_boxplot(outlier.shape = NA) + geom_jitter(alpha = 0.2) + theme_bw()
+
+ggplot(Bodysize, aes(x=overall_size, group_by=Sex, colour = Sex, fill = Sex)) + geom_density(alpha = 0.2) + facet_wrap(~Sex) + theme_bw()
+
+lm_size <- Bodysize |> lmer(overall_size ~ Treatment*Sex + (1|Line), data = _, contrasts = list(Treatment = contr.sum, Sex = contr.sum))
+
+plot(lm_size)
+
+Anova(lm_size, type = 3)
+
+pred_size <- emmeans(lm_size, c("Treatment", "Sex"), by = 'Treatment', type = "response") |> as_tibble()
+
+body_size <- ggplot(pred_size, aes(y=emmean, x=Treatment, group=Treatment, colour = Treatment)) + geom_point(size = 2, position = position_dodge(width = 0.3)) + geom_errorbar(aes(ymin=emmean-SE, ymax=emmean+SE), width = 0, position = position_dodge(width = 0.3)) + theme_bw() + geom_jitter(Bodysize, mapping = aes(x = Treatment, y = overall_size), width = 0.3,
+              size = 2, alpha = 0.2, na.rm = TRUE) + 
+  facet_wrap(~Sex, labeller = labeller(Sex = facet_labels)) + geom_line(aes(group=Sex)) + ylab("Body size score (mm)") +
+  theme(legend.position = "none")+ scale_color_manual(values=c("#56B4E9","#009E73")) + geom_violin(Bodysize, mapping = aes(x = Treatment, y = overall_size), alpha = 0.2)
+
+body_size
+
+#ggsave("./bodysize_figure.pdf", body_size, width = 4, height = 3)
+```
+
+#Lifespan
+```{r}
+facet_labels <- c("Female", "Male")
+names(facet_labels) <- c("F", "M")
+
+ggplot(Bodysize, aes(x=Treatment, y=Lifespan, colour=Sex, fill=Sex)) + geom_violin(alpha=0.2) + geom_jitter()
+
+ggplot(Bodysize, aes(x=Lifespan)) + geom_density()
+
+Bodysize <- Bodysize |> mutate(Line = as.factor(Line))
+
+linear_life_sex <- Bodysize |> lmer(Lifespan~Treatment*Sex + (1|Line), data = _, contrast=list(Treatment=contr.sum, Sex=contr.sum))
+
+plot(linear_life_sex)
+
+Anova(linear_life_sex, type = 3)
+
+pred_sex_life <- emmeans(linear_life_sex, c("Treatment", "Sex"), by = 'Sex', type = "response") |> as_tibble()
+
+lifespan2 <- ggplot(pred_sex_life, aes(y=emmean, x=Treatment, group=Treatment, colour = Treatment)) + geom_point(size = 2, position = position_dodge(width = 0.3)) + geom_errorbar(aes(ymin=emmean-SE, ymax=emmean+SE), width = 0, position = position_dodge(width = 0.3)) + theme_bw() +facet_wrap(~Sex, labeller = labeller(Sex = facet_labels)) + geom_line(aes(group=Sex)) + geom_jitter(Bodysize, mapping = aes(x = Treatment, y = Lifespan), width = 0.3, size = 2, alpha = 0.2, na.rm = TRUE) + ylab("Lifespan (days)") + theme(legend.position = "none") + scale_color_manual(values=c("#56B4E9","#009E73")) + geom_violin(Bodysize, mapping = aes(x = Treatment, y = Lifespan), alpha = 0.2)
+
+lifespan2
+```
+
+##emergence success rate
+```{r}
+ggplot(Emergences, aes(x=Treatment, y=Prop_emerge, colour = Treatment)) + geom_jitter(size = 3, alpha = 0.5) + theme_bw()
+
+reg_prop_emerge_1 <- Emergences |> lm(Prop_emerge ~ Treatment, data = _, contrasts = list(Treatment = contr.sum))
+
+plot(reg_prop_emerge_1)
+
+Anova(reg_prop_emerge_1, type = 3)
+
+pred_prop_emerge_1 <- emmeans(reg_prop_emerge_1, c("Treatment"), by = 'Treatment', type = "response") |> as_tibble()
+
+survival <- ggplot(pred_prop_emerge_1, aes(x=Treatment, y=emmean, colour = Treatment, group = 'emmean')) + geom_point(size = 2) + geom_errorbar(aes(ymin=emmean-SE, ymax=emmean+SE), width = 0) + theme_bw() + geom_jitter(Emergences, mapping = aes(x = Treatment, y = Prop_emerge), width = 0.2, size = 2, alpha = 0.2, na.rm = TRUE) + ylab("Prop. survived to adult") + theme(legend.position = "none")+ scale_color_manual(values=c("#56B4E9","#009E73")) + geom_line(aes(group='emmean'))
+
+survival
+
+#check against beta-reg implementation for proportional data
+Emergences <- Emergences |> mutate(Prop_emerge = Prop_emerge-0.1)
+
+reg_prop_emerge <- Emergences |> betareg(Prop_emerge ~ Treatment, data = _)
+
+plot(reg_prop_emerge)
+
+Anova(reg_prop_emerge, type = 3)
+
+pred_prop_emerge <- emmeans(reg_prop_emerge, c("Treatment"), by = 'Treatment', type = "response") |> as_tibble()
+
+survival <- ggplot(pred_prop_emerge, aes(x=Treatment, y=emmean, colour = Treatment, group = 'emmean')) + geom_point(size = 2) + geom_errorbar(aes(ymin=emmean-SE, ymax=emmean+SE), width = 0) + theme_bw() + geom_jitter(Emergences, mapping = aes(x = Treatment, y = Prop_emerge), width = 0.2, size = 2, alpha = 0.2, na.rm = TRUE) + ylab("Prop. survived to adult") + theme(legend.position = "none")+ scale_color_manual(values=c("#56B4E9","#009E73")) + geom_line(aes(group='emmean'))
+
+survival
+
+#ggsave("./survival_figure.pdf", survival, width = 4, height = 3)
+```
+
+#Development
+```{r}
+dev <- Development |> filter(Stage != "Adult") |> ggplot(aes(x=Treatment, y=Minimum_duration, group=Treatment, colour = Treatment, fill = Treatment), data = _) + geom_violin(outlier.shape = NA, alpha = 0.1) + facet_wrap(~Stage) + geom_jitter(alpha = 0.4) + theme_bw() + scale_color_manual(values=c("#56B4E9","#009E73")) + scale_fill_manual(values=c("#56B4E9","#009E73")) + ylab("Stage duration (days)") + theme(legend.position = "none")
+
+dev
+
+reg_dev_larvae <- Development |> filter(Stage == "Larvae") |> lm(Minimum_duration ~ Treatment, data = _, contrasts = list(Treatment = contr.sum))
+plot(reg_dev_larvae)
+Anova(reg_dev_larvae, type = 3)
+
+reg_dev_pupae <- Development |> filter(Stage == "Pupae") |> lm(Minimum_duration ~ Treatment, data = _, contrasts = list(Treatment = contr.sum))
+plot(reg_dev_pupae)
+Anova(reg_dev_pupae, type = 3)
+```
+
+#Combined plot for traits (Figure 5)
+```{r}
+combined_plot_1 <- plot_grid(dev, survival, nrow=1, ncol=2, labels = c('','B)'), label_x = 0.02, label_y = 1.04, rel_widths = c(2,1))
+combined_plot_1
+
+combined_plot_2 <- plot_grid(combined_plot_1, body_size, lifespan2, nrow = 3, ncol = 1, labels = c('A)','C)','D)'),
+                          label_x = 0.02, label_y = 1.04, rel_widths = c(2,2))
+
+combined_plot_2
+
+#ggsave("./trait_figure.pdf", combined_plot_2, width = 5, height = 5)
+```
+
